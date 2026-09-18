@@ -1,0 +1,6 @@
+# transcripts written by remediation scripts
+*.log
+# editor / OS noise
+.vscode/
+Thumbs.db
+desktop.ini
