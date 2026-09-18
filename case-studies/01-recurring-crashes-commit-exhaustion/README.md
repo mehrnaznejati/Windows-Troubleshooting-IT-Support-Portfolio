@@ -8,7 +8,7 @@
 | **Environment** | Windows 11 Pro laptop, 32 GB RAM, NVMe SSD, Modern Standby (S0 Low Power Idle) only, hybrid iGPU/dGPU graphics. Runs a security lab: Splunk Enterprise, Hyper-V VMs, WSL 2, Windows Sandbox |
 | **Time to diagnose** | ~20 minutes using only the built-in System event log and PowerShell |
 | **Fix** | Re-enable a system-managed page file, trim always-on background load, use Hibernate instead of Modern Standby, disable Fast Startup |
-| **Skills shown** | Event log forensics, bugcheck decoding, Kernel-Power 41 XML parsing, memory commit analysis, elevated PowerShell remediation, post-fix verification |
+| **Skills shown** | Event log forensics, bugcheck decoding, Kernel-Power 41 XML parsing, memory commit analysis, WinDbg crash-dump analysis (`!analyze -v`, `FAILURE_BUCKET_ID`, stack reading), elevated PowerShell remediation, post-fix verification |
 
 ---
 
@@ -108,7 +108,7 @@ A corroborating symptom: `volmgr` **Event 46 "Crash dump initialization failed!"
 |---|---|
 | Faulty RAM | Stop codes are allocation/in-page failures, not the `0x124 / 0x1A / 0x50` corruption signatures; Memory Diagnostic produced no errors |
 | SSD failure | Both NVMe disks `HealthStatus = Healthy`; zero `stornvme 129` resets, zero `disk 153` retries on the boot disk in 30 days |
-| Display driver | Zero `0x9F / 0x116 / 0x117` in 30 days (an earlier, separate `0x9F` issue on this machine had been fixed by a driver update — a machine can have more than one problem) |
+| Display driver | Zero `0x9F / 0x116 / 0x117` in 30 days (an earlier, separate `0x9F` on this machine had been analysed in WinDbg and fixed by a driver update — see [Appendix A](#appendix-a--reading-a-crash-dump-in-windbg-the-earlier-0x9f); a machine can have more than one problem) |
 | Hardware error | `WHEA-Logger` had only 3 informational (ID 3) records, no corrected/uncorrected errors |
 | Thermal | No `Kernel-Power 125/126` thermal events |
 
@@ -205,7 +205,7 @@ Both should trend to **0**. For the first week the numbers still include the pre
 
 ### Step 6 — Only if a crash recurs
 
-`C:\Windows\MEMORY.DMP` will now actually exist. Open it in WinDbg (`!analyze -v`) and read `FAILURE_BUCKET_ID` and the stack. If `0xC0000006` still appears specifically during standby, the next suspect is the NVMe drive entering a deep idle power state — check SSD firmware / BIOS updates, or set *Primary NVMe Idle Timeout* to 0 in the active power plan. Do not pursue this without a dump to justify it.
+`C:\Windows\MEMORY.DMP` will now actually exist. Open it in WinDbg (`!analyze -v`) and read `FAILURE_BUCKET_ID` and the stack — the method is walked through in [Appendix A](#appendix-a--reading-a-crash-dump-in-windbg-the-earlier-0x9f). If `0xC0000006` still appears specifically during standby, the next suspect is the NVMe drive entering a deep idle power state — check SSD firmware / BIOS updates, or set *Primary NVMe Idle Timeout* to 0 in the active power plan. Do not pursue this without a dump to justify it.
 
 ## 5. Lessons
 
@@ -215,3 +215,104 @@ Both should trend to **0**. For the first week the numbers still include the pre
 4. **"Disable the page file for performance" is a myth that still circulates.** On a machine with 32 GB it removed all headroom and all crash-dump capability.
 5. **A machine can have two unrelated faults.** An earlier driver-related `0x9F` had genuinely been fixed; the remaining crashes were a different problem and were nearly dismissed as "the driver again."
 6. **Verify with the same instrument you diagnosed with.** The exit criterion is the event log going quiet, not the user saying "it seems better."
+7. **`FAILURE_BUCKET_ID` is a search key, not a verdict.** In the earlier dump it blamed `pci.sys`; the stack showed the power IRP stuck under the NVIDIA driver. Read the stack bottom-up and look for the first non-Microsoft module.
+
+---
+
+## Appendix A — Reading a crash dump in WinDbg (the earlier 0x9F)
+
+Before the page file was disabled, this machine *did* write one kernel dump, for the earlier `0x9F` mentioned in §2.5. It is a different fault from the commit-exhaustion root cause above, but it is the only dump available and it shows the method Step 6 relies on. The sanitized debugger output is in [`artifacts/windbg-0x9F-analyze.txt`](artifacts/windbg-0x9F-analyze.txt).
+
+### A.1 Opening the dump
+
+WinDbg (Microsoft Store edition) → **File → Open dump file** → `C:\Windows\MEMORY.DMP`, then:
+
+```
+.sympath srv*C:\Symbols*https://msdl.microsoft.com/download/symbols
+.reload
+!analyze -v
+```
+
+Without Microsoft's public symbols the stack reads `nt+0x1234` instead of `nt!KeWaitForSingleObject` and is useless. The `srv*<cache>*<server>` form downloads once and caches locally. To script it (how the artifact was produced):
+
+```powershell
+$kd = Join-Path (Get-AppxPackage Microsoft.WinDbg).InstallLocation 'amd64\kd.exe'
+& $kd -z C:\Windows\MEMORY.DMP -y 'srv*C:\Symbols*https://msdl.microsoft.com/download/symbols' -logo .\analyze.log -c '!analyze -v; q'
+```
+
+A dump can only be written when a page file exists on the boot volume (or a dedicated dump file is configured) — `volmgr 46` on every boot is the symptom when it can't. That is why §2.4's defect also blinded the diagnosis.
+
+### A.2 What `!analyze -v` returned
+
+```
+DRIVER_POWER_STATE_FAILURE (9f)
+Arg1: 0000000000000003   A device object has been blocking an IRP for too long a time
+Arg2: ffffe60aa8454120   Physical Device Object of the stack
+Arg3: ffffcd826eaef5c0   nt!TRIAGE_9F_POWER
+Arg4: ffffe60acbcd4920   The blocked IRP
+
+Unable to load image <DriverStore>\nvlddmkm.sys, Win32 error 0n2
+
+ADDITIONAL_DEBUG_TEXT:  DXG Power IRP timeout.
+IMAGE_NAME:             pci.sys
+PROCESS_NAME:           System
+FAILURE_BUCKET_ID:      0x9F_3_DXG_POWER_IRP_TIMEOUT_IMAGE_pci.sys
+```
+
+System uptime at the crash was 11 h 43 m and the process was `System` — a kernel thread during a power transition, not an application fault.
+
+### A.3 Decoding `FAILURE_BUCKET_ID`
+
+The bucket is the key Windows Error Reporting uses to group identical crashes. It is built from pieces, and each piece is readable:
+
+| Piece | Meaning here |
+|---|---|
+| `0x9F` | Bugcheck code — DRIVER_POWER_STATE_FAILURE |
+| `3` | Arg1 / `DRVPOWERSTATE_SUBCODE` — a device object held a power IRP past the watchdog |
+| `DXG_POWER_IRP_TIMEOUT` | Pattern the analyzer recognised: the DirectX graphics kernel was waiting on the IRP |
+| `IMAGE_pci.sys` | The module the heuristic *blamed* — the owner of the physical device object (Arg2) |
+
+Two rules for using it: search for the whole string (everyone with the same signature has the same bucket), and **treat `IMAGE_NAME` as a hint**. `pci.sys` is a Microsoft bus driver; it did not hang. For 0x9F the blame heuristic walks to the bottom of the device stack, so the real actor has to come from the stack.
+
+### A.4 Reading the stack
+
+`STACK_TEXT` is the faulting thread. The top frame is where the thread was when the dump was taken; **read bottom-up to get the story**. Each line is `child-SP  return-address : args : module!function+offset`.
+
+```
+nt!KiSwapContext+0x76                   7. thread switched out — it is BLOCKED
+nt!KiSwapThread+0x6d4
+nt!KiCommitThreadWait+0x39d
+nt!KeWaitForSingleObject+0x859          6. …waiting on an event that never signals
+dxgkrnl!DpiFdoHandleDevicePower+0x2d0   5. DirectX kernel forwarded the power IRP down and waits
+dxgkrnl!DpiFdoDispatchPower+0x1c
+dxgkrnl!DpiDispatchPower+0xe0
+nvlddmkm+0xd387b3                       4. NVIDIA display driver — raw offset: third-party, no symbols
+nt!PopIrpWorker+0x3d7                   3. power manager worker thread delivering a power IRP
+nt!PspSystemThreadStartup+0x5a          2. …on a system thread
+nt!KiStartSystemThread+0x34             1. thread start
+```
+
+The story: the power manager sent a device-power IRP to the GPU during a sleep transition. It passed through the NVIDIA driver into `dxgkrnl`, which sent it further down the stack and waited. The completion never came; after the watchdog expired the kernel bugchecked. The actionable module is **`nvlddmkm.sys`**, not `pci.sys` — the first non-Microsoft frame, identifiable by its `module+0xoffset` form and the `Unable to load image` warning above.
+
+### A.5 Following the evidence past the stack
+
+The bugcheck arguments are addresses you can hand straight to the debugger:
+
+```
+!irp ffffe60acbcd4920        the blocked IRP (Arg4): the stack location marked >[ ... ] pending is the owner
+!devstack ffffe60aa8454120   the device stack (Arg2): every driver layered on this device
+!drvobj ffffe60aa8169e10 2   the driver object: name and dispatch table
+lmvm nvlddmkm                suspect's version and link timestamp — compare with the installed release
+!poaction                    which power action was in flight (sleep / hibernate / shutdown)
+!thread ffffe60aa26d3040     the faulting thread: state, wait reason, wait object
+!vm 1                        commit charge and limit at crash time — the field that matters for §2.3
+kv / knL                     the stack with frame pointers / numbered frames
+```
+
+`!irp` is decisive for 0x9F: it shows which driver currently owns the IRP.
+
+### A.6 Outcome
+
+`lmvm nvlddmkm` dated the driver; a newer release existed and was installed. No further `0x9F` appeared in the following 30 days (§2.5). The subsequent crashes were the separate commit-exhaustion fault this case study is about, which — because they left no dump — had to be diagnosed from the event log alone.
+
+Notes on dump quality: `Page … not present in the dump file` and `Unable to load image` are normal for Automatic/Active kernel dumps — they omit pages the kernel considers unnecessary, and third-party binaries are not on Microsoft's symbol server. The raw offsets remain valid. Anything a minidump cannot answer (`!process`, other threads, `!vm` detail) needs a Kernel or Complete dump, which requires the page file to be large enough for it.

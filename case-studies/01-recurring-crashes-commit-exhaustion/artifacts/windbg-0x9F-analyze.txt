@@ -1,0 +1,95 @@
+# Sanitized excerpt of a WinDbg session:  kd.exe -z MEMORY.DMP -c "!analyze -v; q"
+# Removed: local file paths, driver-store package hash, firmware identifiers, timestamps,
+#          symbol-loading noise and the Analysis.*/Bugcheck.*/Dump.* key-value block.
+# Kernel addresses are left intact - they are per-boot values and carry no identifying data.
+
+Loading Dump File [C:\Windows\MEMORY.DMP]
+Kernel Bitmap Dump File: Kernel address space is available, User address space may not be available.
+
+Windows 10 Kernel Version 26100 MP (32 procs) Free x64
+Product: WinNt, suite: TerminalServer SingleUserTS
+Edition build lab: 26100.1.amd64fre.ge_release.240331-1435
+Kernel base = 0xfffff802`e4e00000 PsLoadedModuleList = 0xfffff802`e5cf5350
+Debug session time: <redacted>
+System Uptime: 0 days 11:42:59.936
+
+kd> !analyze -v
+
+...............
+*******************************************************************************
+*                                                                             *
+*                        Bugcheck Analysis                                    *
+*                                                                             *
+*******************************************************************************
+
+DRIVER_POWER_STATE_FAILURE (9f)
+A driver has failed to complete a power IRP within a specific time.
+Arguments:
+Arg1: 0000000000000003, A device object has been blocking an IRP for too long a time
+Arg2: ffffe60aa8454120, Physical Device Object of the stack
+Arg3: ffffcd826eaef5c0, nt!TRIAGE_9F_POWER on Win7 and higher, otherwise the Functional Device Object of the stack
+Arg4: ffffe60acbcd4920, The blocked IRP
+
+Debugging Details:
+------------------
+
+Implicit thread is now ffffe60a`a26d3040
+Unable to load image <DriverStore>\nvlddmkm.sys, Win32 error 0n2
+Page 116610 not present in the dump file. Type ".hh dbgerr004" for details
+
+------------------
+
+[... key-value block omitted ...]
+
+BUGCHECK_CODE:  9f
+
+BUGCHECK_P1: 3
+
+BUGCHECK_P2: ffffe60aa8454120
+
+BUGCHECK_P3: ffffcd826eaef5c0
+
+BUGCHECK_P4: ffffe60acbcd4920
+
+FAULTING_THREAD:  ffffe60aa26d3040
+
+DRVPOWERSTATE_SUBCODE:  3
+
+ADDITIONAL_DEBUG_TEXT:  DXG Power IRP timeout.
+
+IRP_ADDRESS: ffffe60acbcd4920
+
+DEVICE_OBJECT: ffffe60aa8454120
+
+DRIVER_OBJECT: ffffe60aa8169e10
+
+IMAGE_NAME:  pci.sys
+
+MODULE_NAME: pci
+
+PROCESS_NAME:  System
+
+DPC_STACK_BASE:  FFFFCD826EAE7FB0
+
+STACK_TEXT:  
+ffffcd82`6ea17460 fffff802`e50d6794     : 00000000`00000047 00000000`00000000 00000000`00000000 ffff9901`ccfe92b0 : nt!KiSwapContext+0x76
+ffffcd82`6ea175a0 fffff802`e512049d     : 00000000`00000000 00000000`00000000 ffffcd82`6ea17730 fffff802`7762afc0 : nt!KiSwapThread+0x6d4
+ffffcd82`6ea17630 fffff802`e511e699     : ffffe60a`00000000 00000000`00000000 00000000`00000000 00000000`00000000 : nt!KiCommitThreadWait+0x39d
+ffffcd82`6ea176c0 fffff802`77079ef0     : ffffcd82`6ea177d8 ffffe60a`00000000 00000000`00000000 ffffe60a`c5603000 : nt!KeWaitForSingleObject+0x859
+ffffcd82`6ea177a0 fffff802`77079bfc     : ffffcd82`6ea17800 00000000`00000004 ffffe9b9`5bfd1de8 fffff802`902c42eb : dxgkrnl!DpiFdoHandleDevicePower+0x2d0
+ffffcd82`6ea17830 fffff802`77052ad0     : ffffe60a`cbcd4920 ffffe60a`cbcd4920 ffffe60a`c5603180 ffffe60a`c5603030 : dxgkrnl!DpiFdoDispatchPower+0x1c
+ffffcd82`6ea17860 fffff802`903287b3     : 00000000`00000001 00000000`00000000 00000000`00000000 ffffe60a`d3376000 : dxgkrnl!DpiDispatchPower+0xe0
+ffffcd82`6ea17980 fffff802`e52e3a27     : ffffe60a`d3a8eb00 ffffe60a`c5603030 ffffe60a`d3a8eb00 ffffcd82`00000000 : nvlddmkm+0xd387b3
+ffffcd82`6ea17a80 fffff802`e528212a     : 00000000`00000000 ffffe60a`a26d3040 fffff802`e52e3650 00000000`00000000 : nt!PopIrpWorker+0x3d7
+ffffcd82`6ea17b30 fffff802`e54acd94     : ffff9901`cd251180 ffffe60a`a26d3040 fffff802`e52820d0 b89a05c7`0000441f : nt!PspSystemThreadStartup+0x5a
+ffffcd82`6ea17b80 00000000`00000000     : ffffcd82`6ea18000 ffffcd82`6ea11000 00000000`00000000 00000000`00000000 : nt!KiStartSystemThread+0x34
+
+IMAGE_VERSION:  10.0.26100.8737
+
+STACK_COMMAND: .process /r /p 0xffffe60aa26dd040; .thread /r /p 0xffffe60aa26d3040 ; kb
+
+FAILURE_BUCKET_ID:  0x9F_3_DXG_POWER_IRP_TIMEOUT_IMAGE_pci.sys
+
+OS_VERSION:  10.0.26100.1
+
+BUILDLAB_STR:  ge_release

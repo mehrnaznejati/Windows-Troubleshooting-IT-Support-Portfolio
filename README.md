@@ -21,7 +21,7 @@ personal data have been removed.
 
 | # | Title | Root cause | Key techniques |
 |---|---|---|---|
-| [01](case-studies/01-recurring-crashes-commit-exhaustion/) | Recurring unexpected shutdowns & freezes on a Windows 11 workstation | Page file disabled → commit limit = RAM → critical-process allocation failures | Kernel-Power 41 XML decoding, Resource-Exhaustion 2004 parsing, commit analysis, `powercfg`, Hibernate vs Modern Standby |
+| [01](case-studies/01-recurring-crashes-commit-exhaustion/) | Recurring unexpected shutdowns & freezes on a Windows 11 workstation | Page file disabled → commit limit = RAM → critical-process allocation failures | Kernel-Power 41 XML decoding, Resource-Exhaustion 2004 parsing, commit analysis, WinDbg `!analyze -v` + stack reading, `powercfg`, Hibernate vs Modern Standby |
 
 Script conventions: `01`–`04` diagnostic (read-only) · `05` remediation (`#Requires -RunAsAdministrator`,
 writes a transcript, never reboots on its own) · `06` verification / weekly monitor.
